@@ -9,7 +9,7 @@ const Admin = require("../models/Admin");
 const API = require("../models/Api");
 const User = require("../models/User"); // New model
 const WebSocket = require("ws");
-const wss = new WebSocket.Server({ port: 8080 });
+
 
 const verifyToken = (req, res, next) => {
   const authHeader = req.headers.authorization;
@@ -242,18 +242,6 @@ router.delete("/users/:userId", verifyToken, async (req, res) => {
 });
 
 
-
-wss.on("connection", (ws) => {
-  console.log("Client connected");
-
-  ws.on("message", (message) => {
-    console.log(`Received message: ${message}`);
-  });
-
-  ws.on("close", () => {
-    console.log("Client disconnected");
-  });
-});
 
 // Broadcast function to send messages to all connected clients
 const broadcast = (data) => {
