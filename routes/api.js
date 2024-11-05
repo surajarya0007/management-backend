@@ -8,7 +8,6 @@ const SECRET_KEY = "ABC";
 const Admin = require("../models/Admin");
 const API = require("../models/Api");
 const User = require("../models/User"); // New model
-const WebSocket = require("ws");
 
 
 const verifyToken = (req, res, next) => {
@@ -242,14 +241,5 @@ router.delete("/users/:userId", verifyToken, async (req, res) => {
 });
 
 
-
-// Broadcast function to send messages to all connected clients
-const broadcast = (data) => {
-  wss.clients.forEach((client) => {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(JSON.stringify(data));
-    }
-  });
-};
 
 module.exports = router;
