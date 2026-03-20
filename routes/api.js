@@ -2,12 +2,44 @@ const express = require("express");
 const router = express.Router();
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const http = require("http");
+const https = require("https");
 
 const SECRET_KEY = process.env.JWT_SECRET || "ABC";
 
 const API = require("../models/Api");
 const User = require("../models/User");
 const Scan = require("../models/Scan");
+const RoleConfig = require("../models/RoleConfig");
+const { ensureRoleConfigs } = require("../utils/roleConfigSeed");
+
+// ─── Endpoint Connectivity Check ──────────────────────────────────────────────
+
+const checkEndpoint = (rawUrl, timeoutMs = 6000) => {
+  return new Promise((resolve) => {
+    try {
+      let url = rawUrl.trim();
+      if (!url.startsWith("http://") && !url.startsWith("https://")) {
+        url = "https://" + url;
+      }
+      const lib = url.startsWith("https://") ? https : http;
+      const req = lib.get(url, { timeout: timeoutMs }, (res) => {
+        const reachable = res.statusCode < 500;
+        res.resume();
+        resolve({ reachable, statusCode: res.statusCode });
+      });
+      req.setTimeout(timeoutMs, () => {
+        req.destroy();
+        resolve({ reachable: false, statusCode: 0, reason: "Timed out" });
+      });
+      req.on("error", (err) => {
+        resolve({ reachable: false, statusCode: 0, reason: err.message });
+      });
+    } catch (err) {
+      resolve({ reachable: false, statusCode: 0, reason: err.message });
+    }
+  });
+};
 
 // ─── Middleware ────────────────────────────────────────────────────────────────
 
@@ -40,6 +72,12 @@ router.post("/user/signup", async (req, res) => {
 
     if (!email || !password || !role || !username || !fullname) {
       return res.status(400).json({ message: "All fields are required" });
+    }
+
+    await ensureRoleConfigs();
+    const roleDoc = await RoleConfig.findOne({ roleName: role.trim() });
+    if (!roleDoc) {
+      return res.status(400).json({ message: "Invalid role selected" });
     }
 
     const existing = await User.findOne({ email });
@@ -92,6 +130,106 @@ router.post("/login", async (req, res) => {
   } catch (error) {
     console.error("Login error:", error);
     res.status(500).json({ message: "Server error" });
+  }
+});
+
+// ─── Roles (public names for signup) & Role config (Admin) ─────────────────────
+
+router.get("/roles", async (req, res) => {
+  try {
+    await ensureRoleConfigs();
+    const list = await RoleConfig.find().sort({ roleName: 1 }).select("roleName").lean();
+    res.status(200).json({ roles: list.map((r) => r.roleName) });
+  } catch (error) {
+    console.error("Error listing roles:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+router.get("/role-configs", verifyToken, requireAdmin, async (req, res) => {
+  try {
+    await ensureRoleConfigs();
+    const configs = await RoleConfig.find().sort({ roleName: 1 }).lean();
+    res.status(200).json(configs);
+  } catch (error) {
+    console.error("Error fetching role configs:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+router.post("/role-configs", verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { roleName, permissions } = req.body;
+    const name = (roleName || "").trim();
+    if (!name) {
+      return res.status(400).json({ message: "Role name is required" });
+    }
+    const existing = await RoleConfig.findOne({ roleName: name });
+    if (existing) {
+      return res.status(400).json({ message: "A role with this name already exists" });
+    }
+    const doc = await RoleConfig.create({
+      roleName: name,
+      permissions: Array.isArray(permissions) ? permissions : [],
+      isSystem: false,
+    });
+    res.status(201).json(doc);
+  } catch (error) {
+    console.error("Error creating role:", error);
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+});
+
+router.put("/role-configs", verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { roleName, permissions } = req.body;
+    const name = (roleName || "").trim();
+    if (!name) {
+      return res.status(400).json({ message: "Role name is required" });
+    }
+    if (!Array.isArray(permissions)) {
+      return res.status(400).json({ message: "permissions must be an array" });
+    }
+    const updated = await RoleConfig.findOneAndUpdate(
+      { roleName: name },
+      { $set: { permissions } },
+      { new: true, runValidators: true },
+    );
+    if (!updated) {
+      return res.status(404).json({ message: "Role not found" });
+    }
+    res.status(200).json(updated);
+  } catch (error) {
+    console.error("Error updating role:", error);
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+});
+
+router.delete("/role-configs", verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { roleName } = req.body;
+    const name = (roleName || "").trim();
+    if (!name) {
+      return res.status(400).json({ message: "Role name is required" });
+    }
+    const doc = await RoleConfig.findOne({ roleName: name });
+    if (!doc) {
+      return res.status(404).json({ message: "Role not found" });
+    }
+    if (doc.isSystem) {
+      return res.status(403).json({ message: "System roles cannot be deleted" });
+    }
+    const usersWithRole = await User.countDocuments({ role: name });
+    if (usersWithRole > 0) {
+      return res.status(400).json({
+        message: `Cannot delete role: ${usersWithRole} user(s) still have this role. Reassign them first.`,
+      });
+    }
+    await RoleConfig.deleteOne({ _id: doc._id });
+    res.status(204).end();
+  } catch (error) {
+    console.error("Error deleting role:", error);
+    res.status(500).json({ message: "Server error", error: error.message });
   }
 });
 
@@ -166,6 +304,50 @@ router.get("/api/:apiId", verifyToken, async (req, res) => {
   } catch (error) {
     console.error("Error fetching API:", error);
     res.status(500).json({ message: "Server error" });
+  }
+});
+
+router.put("/api/:apiId", verifyToken, async (req, res) => {
+  try {
+    const { apiId } = req.params;
+    const userRole = req.user.role;
+    const { name, endpoint, description, owner, status, version, lastScanned } = req.body;
+
+    const query = userRole === "Admin" ? { _id: apiId } : { _id: apiId, role: userRole };
+
+    const updated = await API.findOneAndUpdate(
+      query,
+      { name, endpoint, description, owner, status, version, lastScanned, lastUpdated: new Date() },
+      { new: true, runValidators: true }
+    );
+
+    if (!updated) {
+      return res.status(404).json({ message: "API not found" });
+    }
+
+    res.status(200).json(updated);
+  } catch (error) {
+    console.error("Error updating API:", error);
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+});
+
+router.delete("/api/:apiId", verifyToken, async (req, res) => {
+  try {
+    const { apiId } = req.params;
+    const userRole = req.user.role;
+
+    const query = userRole === "Admin" ? { _id: apiId } : { _id: apiId, role: userRole };
+    const deleted = await API.findOneAndDelete(query);
+
+    if (!deleted) {
+      return res.status(404).json({ message: "API not found" });
+    }
+
+    res.status(204).end();
+  } catch (error) {
+    console.error("Error deleting API:", error);
+    res.status(500).json({ message: "Server error", error: error.message });
   }
 });
 
@@ -253,6 +435,12 @@ router.post("/users", verifyToken, requireAdmin, async (req, res) => {
       return res.status(400).json({ message: "All fields are required" });
     }
 
+    await ensureRoleConfigs();
+    const roleDoc = await RoleConfig.findOne({ roleName: role.trim() });
+    if (!roleDoc) {
+      return res.status(400).json({ message: "Invalid role" });
+    }
+
     const existing = await User.findOne({ $or: [{ email }, { username }] });
     if (existing) {
       return res.status(400).json({ message: "User with this email or username already exists" });
@@ -276,6 +464,14 @@ router.put("/users/:userId", verifyToken, requireAdmin, async (req, res) => {
   try {
     const { userId } = req.params;
     const { username, fullName, email, role } = req.body;
+
+    if (role) {
+      await ensureRoleConfigs();
+      const roleDoc = await RoleConfig.findOne({ roleName: role.trim() });
+      if (!roleDoc) {
+        return res.status(400).json({ message: "Invalid role" });
+      }
+    }
 
     const updatedUser = await User.findByIdAndUpdate(
       userId,
@@ -328,33 +524,72 @@ router.get("/scans", verifyToken, async (req, res) => {
 
 router.post("/scans", verifyToken, async (req, res) => {
   try {
-    const { apiName, frequency, typesOfChecks } = req.body;
+    const { frequency, typesOfChecks } = req.body;
+    const userRole = req.user.role;
 
-    const newScan = new Scan({
-      scanDate: new Date(),
-      apiName: apiName || "All APIs",
-      results: "In Progress",
-      vulnerabilitiesDetected: 0,
-      frequency: frequency || "Manual",
-      typesOfChecks: typesOfChecks || [],
-      createdBy: req.user.email,
-    });
+    // Fetch all APIs this user can access
+    const apis = userRole === "Admin"
+      ? await API.find()
+      : await API.find({ role: userRole });
 
-    await newScan.save();
+    if (apis.length === 0) {
+      return res.status(200).json({ message: "No APIs registered to scan", scans: [] });
+    }
 
-    // Simulate scan completion after 2 seconds (in real system this would be async)
-    setTimeout(async () => {
-      try {
-        newScan.results = "Success";
-        await newScan.save();
-      } catch (e) {
-        console.error("Scan update error:", e);
+    // Check all endpoints in parallel
+    const checkResults = await Promise.all(
+      apis.map(async (api) => {
+        const result = await checkEndpoint(api.endpoint);
+        return { api, ...result };
+      })
+    );
+
+    const scanDocs = [];
+
+    for (const { api, reachable, statusCode, reason } of checkResults) {
+      const failed = !reachable;
+
+      // Create one scan record per API
+      const scan = new Scan({
+        scanDate: new Date(),
+        apiName: api.name,
+        results: failed ? "Failed" : "Success",
+        vulnerabilitiesDetected: failed ? 1 : 0,
+        frequency: frequency || "Manual",
+        typesOfChecks: typesOfChecks || [],
+        createdBy: req.user.email,
+      });
+      await scan.save();
+      scanDocs.push(scan);
+
+      // Build the API update
+      const apiUpdate = {
+        $set: {
+          securityStatus: failed ? "Vulnerable" : "Secure",
+          lastScanned: new Date(),
+        },
+      };
+
+      // Add an Open vulnerability entry only if the API isn't already marked Vulnerable
+      // (avoids duplicate entries on repeated scans)
+      if (failed && api.securityStatus !== "Vulnerable") {
+        apiUpdate.$push = {
+          vulnerabilities: {
+            description: `Endpoint unreachable — ${reason || `HTTP ${statusCode}`}`,
+            severity: "High",
+            remediation: "Verify the API endpoint URL is correct and the service is running.",
+            status: "Open",
+            discoveredDate: new Date(),
+          },
+        };
       }
-    }, 2000);
 
-    res.status(201).json({ message: "Scan initiated successfully", scan: newScan });
+      await API.findByIdAndUpdate(api._id, apiUpdate);
+    }
+
+    res.status(201).json({ message: "Scan completed", scans: scanDocs });
   } catch (error) {
-    console.error("Error creating scan:", error);
+    console.error("Error running scan:", error);
     res.status(500).json({ message: "Server error" });
   }
 });

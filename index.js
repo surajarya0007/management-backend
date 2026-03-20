@@ -2,6 +2,7 @@ const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
 const apiRoutes = require("./routes/api");
+const { ensureRoleConfigs } = require("./utils/roleConfigSeed");
 const dotenv = require("dotenv");
 dotenv.config();
 
@@ -18,8 +19,13 @@ if (!MONGO_URI) {
 
 mongoose
   .connect(MONGO_URI, { serverSelectionTimeoutMS: 10000 })
-  .then(() => {
+  .then(async () => {
     console.log("Connected to MongoDB");
+    try {
+      await ensureRoleConfigs();
+    } catch (e) {
+      console.error("Role config seed error:", e.message);
+    }
   })
   .catch((error) => {
     console.error("MongoDB connection error:", error.message);
@@ -27,7 +33,6 @@ mongoose
   });
 
 app.use(cors());
-
 app.use(express.json());
 app.use("/api", apiRoutes);
 

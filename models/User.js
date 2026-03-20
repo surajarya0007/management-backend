@@ -1,8 +1,6 @@
 const mongoose = require("mongoose");
 const { Schema } = mongoose;
 
-const ROLES = ["Admin", "Security Analyst", "Developer", "Analyst", "Tester", "Engineer"];
-
 const userSchema = new Schema({
   username: {
     type: String,
@@ -28,8 +26,8 @@ const userSchema = new Schema({
   },
   role: {
     type: String,
-    enum: ROLES,
     required: true,
+    trim: true,
   },
   phoneNumber: {
     type: String,
