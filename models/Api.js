@@ -8,7 +8,7 @@ const apiSchema = new mongoose.Schema({
   endpoint: {
     type: String,
     required: true,
-  },  
+  },
   description: {
     type: String,
     required: true,
@@ -26,6 +26,9 @@ const apiSchema = new mongoose.Schema({
     type: Date,
     required: true,
   },
+  lastUpdated: {
+    type: Date,
+  },
   version: {
     type: String,
     required: true,
@@ -33,6 +36,14 @@ const apiSchema = new mongoose.Schema({
   creationDate: {
     type: Date,
     required: true,
+  },
+  securityStatus: {
+    type: String,
+    enum: ["Secure", "Vulnerable", "Unknown"],
+    default: "Unknown",
+  },
+  documentationUrl: {
+    type: String,
   },
   documentation: {
     type: String,
