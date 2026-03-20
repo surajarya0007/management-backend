@@ -3,14 +3,18 @@ const mongoose = require("mongoose");
 const cors = require("cors");
 const apiRoutes = require("./routes/api");
 
-require("dotenv").config();
+if (!process.env.VERCEL) {
+  require("dotenv").config();
+}
 
 const app = express();
 const PORT = process.env.PORT || 5000;
-const MONGO_URI = process.env.MONGO_URI;
+const MONGO_URI = process.env.MONGO_URI || process.env.MONGODB_URI;
 
 if (!MONGO_URI) {
-  console.error("MONGO_URI is not set. Please configure your .env file.");
+  console.error(
+    "MONGO_URI (or MONGODB_URI) is not set. Use .env locally; on Vercel set it under Project → Environment Variables and redeploy."
+  );
   process.exit(1);
 }
 
@@ -24,11 +28,13 @@ mongoose
     console.warn("Server continuing — will retry DB connection in background.");
   });
 
-app.use(cors({
-  origin: process.env.FRONTEND_URL || "*",
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
-}));
+app.use(
+  cors({
+    origin: process.env.FRONTEND_URL || "*",
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  }),
+);
 
 app.use(express.json());
 app.use("/api", apiRoutes);
@@ -37,6 +43,11 @@ app.get("/", (req, res) => {
   res.json({ message: "API Security Shield backend is running." });
 });
 
-app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
-});
+// Vercel serverless: export the app (no listen). Local: listen on PORT.
+if (process.env.VERCEL) {
+  module.exports = app;
+} else {
+  app.listen(PORT, () => {
+    console.log(`Server is running on port ${PORT}`);
+  });
+}
