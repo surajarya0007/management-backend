@@ -2,18 +2,16 @@ const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
 const apiRoutes = require("./routes/api");
-
-if (!process.env.VERCEL) {
-  require("dotenv").config();
-}
+const dotenv = require("dotenv");
+dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
-const MONGO_URI = process.env.MONGO_URI || process.env.MONGODB_URI;
+const MONGO_URI = process.env.MONGO_URI;
 
 if (!MONGO_URI) {
   console.error(
-    "MONGO_URI (or MONGODB_URI) is not set. Use .env locally; on Vercel set it under Project → Environment Variables and redeploy."
+    "MONGO_URI (or MONGODB_URI) is not set. Use .env locally; on Vercel set it under Project → Environment Variables and redeploy.",
   );
   process.exit(1);
 }
